@@ -240,7 +240,7 @@ int main()
         PrintFeature(floridaOSM[i]);
 
     double startTime = omp_get_wtime();
-    std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, 100);
+    std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, 1000);
     double endTime = omp_get_wtime();
 
     std::cout << "\nTotal matches: " << matches.size() << std::endl;
