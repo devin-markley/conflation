@@ -19,7 +19,7 @@ struct Match
     double distance;
 };
 
-// Compute the straight-line (Euclidean) distance between two points
+// Compute the straight-line distance between two points
 double PointDistance(const OGRPoint& p1, const OGRPoint& p2)
 {
     double dx = p1.getX() - p2.getX();
@@ -78,6 +78,21 @@ double FeatureHausdorffDistance(OGRFeature* f1, OGRFeature* f2)
                     DirectedHausdorff(g2, g1));
 }
 
+void PrintGeometry(OGRFeature* f)
+{
+    OGRGeometry *poGeom = f->GetGeometryRef();
+    if (poGeom)
+    {
+        char *wkt = nullptr;
+        poGeom->exportToWkt(&wkt);
+        printf(" Geometry (WKT): %s", (wkt ? wkt : "(null)"));
+        CPLFree(wkt); // Mandatory manual cleanup
+    } else {
+        printf(" Geometry: (null)");
+    }
+    printf("\n");
+}
+
 void PrintFeature(OGRFeature* f)
 {
     printf("Fields: ");
@@ -88,28 +103,20 @@ void PrintFeature(OGRFeature* f)
         printf("%s,", field_value);
     }
 
-    OGRGeometry *poGeom = f->GetGeometryRef();
-    if(poGeom)
-    {
-        char *wkt = nullptr;
-        poGeom->exportToWkt(&wkt);
-        printf(" Geometry (WKT): %s", (wkt ? wkt : "(null)"));
-        CPLFree(wkt);
-    }
-    printf("\n");
+    PrintGeometry(f)
 }
 
 void PrintMatches(const std::vector<Match>& matches)
 {
-    for (size_t i = 0; i < matches.size(); ++i)
+    for (size_t i = 0; i < 6; ++i)
     {
-        printf("Match %zu, Distance: %.6f\n", i + 1, matches[i].distance);
+        printf("Distance: %.6f\n", i + 1, matches[i].distance);
 
         printf("  TDA: ");
-        PrintFeature(matches[i].tda_feature);
+        PrintGeometry(matches[i].tda_feature);
 
         printf("  OSM: ");
-        PrintFeature(matches[i].osm_feature);
+        PrintGeometry(matches[i].tda_feature);
 
         printf("----------------------------------\n");
     }
@@ -137,7 +144,6 @@ std::vector<OGRFeature*> ReadFeatures(const char* path, const char* layerName, c
     if (filter)
         poLayer->SetAttributeFilter(filter);
 
-    // Read Features and collect them
     poLayer->ResetReading();
     OGRFeature *poFeature;
     while ((poFeature = poLayer->GetNextFeature()) != nullptr)
@@ -161,7 +167,7 @@ std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
     {
         OGRFeature* current_tda_feature = tdaFeatures[i];
 
-        double minHausdorff = std::numeric_limits<double>::max();
+        double minDist = std::numeric_limits<double>::max();
         OGRFeature* closestOSM = nullptr;
 
         // Iterator that points to the closest OSM feature found
@@ -173,9 +179,9 @@ std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
             OGRFeature* current_osm_feature = *it;
             double dist = FeatureHausdorffDistance(current_tda_feature, current_osm_feature);
 
-            if (dist < minHausdorff)
+            if (dist < minDist)
             {
-                minHausdorff = dist;
+                minDist = dist;
                 closestOSM = current_osm_feature;
                 it_closest_osm = it;
             }
@@ -184,10 +190,9 @@ std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
         // If a valid match was found
         if (closestOSM)
         {
-            matches.push_back(Match{ current_tda_feature, closestOSM, minHausdorff });
+            matches.push_back(Match{ current_tda_feature, closestOSM, minDist});
 
             // Remove the matched OSM feature to ensure a 1:1 match.
-            // NOTE: This is O(N) and slow, but kept simple.
             osmFeatures.erase(it_closest_osm);
         }
     }
