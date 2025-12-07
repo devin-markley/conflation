@@ -1,9 +1,11 @@
 #include <iostream>
 #include <vector>
-#include <ogrsf_frmts.h>
-#include <omp.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cstdio>
+#include <ogrsf_frmts.h>
+#include <omp.h>
 
 const char* PATH_TO_FLORIDA_MAX_SPEED_LIMIT =
     "/Users/devinmarkley/CLionProjects/untitled3/MSL_Florida.geojson";
@@ -12,78 +14,39 @@ const char* PATH_TO_FLORIDA_OSM =
 
 struct Match
 {
-    OGRFeature* tda;
-    OGRFeature* osm;
+    OGRFeature* tda_feature;
+    OGRFeature* osm_feature;
     double distance;
 };
 
-void PrintFeature(OGRFeature* f)
-{
-    for (int i = 0; i < f->GetFieldCount(); ++i)
-    {
-        if (f->IsFieldSetAndNotNull(i))
-            std::cout << f->GetFieldAsString(i);
-        else
-            std::cout << "(null)";
-        std::cout << ",";
-    }
-
-    OGRGeometry *poGeom = f->GetGeometryRef();
-    if(poGeom)
-    {
-        char *wkt = nullptr;
-        poGeom->exportToWkt(&wkt);
-        std::cout << wkt;
-        CPLFree(wkt);
-    }
-
-    std::cout << std::endl;
-}
-
-void PrintMatches(const std::vector<Match>& matches)
-{
-    for (size_t i = 0; i < matches.size(); ++i)
-    {
-        std::cout << "Match " << i + 1 << ", Distance: " << matches[i].distance << std::endl;
-        std::cout << "TDA: ";
-        PrintFeature(matches[i].tda);
-        std::cout << "OSM: ";
-        PrintFeature(matches[i].osm);
-        std::cout << "----------------------------------" << std::endl;
-    }
-}
-
-// Helper: compute Euclidean distance between two points
+// Compute the straight-line (Euclidean) distance between two points
 double PointDistance(const OGRPoint& p1, const OGRPoint& p2)
 {
     double dx = p1.getX() - p2.getX();
     double dy = p1.getY() - p2.getY();
-    return std::sqrt(dx*dx + dy*dy);
+    return std::sqrt(dx * dx + dy * dy);
 }
 
-// Extract points from LineString geometry
+// Extract all coordinate points from a LineString geometry
 std::vector<OGRPoint> GetPoints(OGRGeometry* geom)
 {
     std::vector<OGRPoint> points;
     if (!geom) return points;
 
-    OGRwkbGeometryType type = wkbFlatten(geom->getGeometryType());
-    OGRLineString* line = geom->toLineString();
+    OGRLineString* line = (OGRLineString*)geom;
     for (int i = 0; i < line->getNumPoints(); ++i)
     {
         OGRPoint p;
         line->getPoint(i, &p);
         points.push_back(p);
     }
-
-
     return points;
 }
 
-// Directed Hausdorff distance (from geom1 to geom2)
+// Directed Hausdorff distance (from points in geom1 to nearest points in geom2)
 double DirectedHausdorff(OGRGeometry* geom1, OGRGeometry* geom2)
 {
-    double maxMinDist = 0.0;
+    double max_min_dist = 0.0;
     std::vector<OGRPoint> pts1 = GetPoints(geom1);
     std::vector<OGRPoint> pts2 = GetPoints(geom2);
 
@@ -91,18 +54,19 @@ double DirectedHausdorff(OGRGeometry* geom1, OGRGeometry* geom2)
 
     for (auto& p1 : pts1)
     {
-        double minDist = std::numeric_limits<double>::max();
+        double min_dist_to_p2 = std::numeric_limits<double>::max();
+
         for (auto& p2 : pts2)
         {
             double d = PointDistance(p1, p2);
-            if (d < minDist) minDist = d;
+            min_dist_to_p2 = std::min(min_dist_to_p2, d);
         }
-        if (minDist > maxMinDist) maxMinDist = minDist;
+        max_min_dist = std::max(max_min_dist, min_dist_to_p2);
     }
-    return maxMinDist;
+    return max_min_dist;
 }
 
-// Symmetric Hausdorff distance
+// Symmetric Hausdorff distance (the maximum of the two directed distances)
 double FeatureHausdorffDistance(OGRFeature* f1, OGRFeature* f2)
 {
     OGRGeometry* g1 = f1->GetGeometryRef();
@@ -110,147 +74,164 @@ double FeatureHausdorffDistance(OGRFeature* f1, OGRFeature* f2)
 
     if (!g1 || !g2) return std::numeric_limits<double>::max();
 
-    double dist = std::max(DirectedHausdorff(g1, g2),
-                           DirectedHausdorff(g2, g1));
-
-    return dist;
+    return std::max(DirectedHausdorff(g1, g2),
+                    DirectedHausdorff(g2, g1));
 }
 
-// --------------------- Reading datasets ---------------------
+void PrintFeature(OGRFeature* f)
+{
+    printf("Fields: ");
 
-std::vector<OGRFeature*> ReadFloridaTDA()
+    for (int i = 0; i < f->GetFieldCount(); ++i)
+    {
+        const char* field_value = f->IsFieldSetAndNotNull(i) ? f->GetFieldAsString(i) : "(null)";
+        printf("%s,", field_value);
+    }
+
+    OGRGeometry *poGeom = f->GetGeometryRef();
+    if(poGeom)
+    {
+        char *wkt = nullptr;
+        poGeom->exportToWkt(&wkt);
+        printf(" Geometry (WKT): %s", (wkt ? wkt : "(null)"));
+        CPLFree(wkt);
+    }
+    printf("\n");
+}
+
+void PrintMatches(const std::vector<Match>& matches)
+{
+    for (size_t i = 0; i < matches.size(); ++i)
+    {
+        printf("Match %zu, Distance: %.6f\n", i + 1, matches[i].distance);
+
+        printf("  TDA: ");
+        PrintFeature(matches[i].tda_feature);
+
+        printf("  OSM: ");
+        PrintFeature(matches[i].osm_feature);
+
+        printf("----------------------------------\n");
+    }
+}
+
+std::vector<OGRFeature*> ReadFeatures(const char* path, const char* layerName, const char* filter = nullptr)
 {
     std::vector<OGRFeature*> features;
 
     GDALDataset *poDS = (GDALDataset*) GDALOpenEx(
-        PATH_TO_FLORIDA_MAX_SPEED_LIMIT, GDAL_OF_VECTOR, NULL, NULL, NULL);
-    if (!poDS)
-    {
-        std::cerr << "Failed to open Florida TDA dataset." << std::endl;
+        path, GDAL_OF_VECTOR, NULL, NULL, NULL);
+
+    if (!poDS) {
+        fprintf(stderr, "Error: Failed to open dataset at %s\n", path);
         return features;
     }
 
-    OGRLayer *poLayer = poDS->GetLayerByName("Maximum_Speed_Limit_TDA");
-    if (!poLayer)
-    {
-        std::cerr << "Layer not found!" << std::endl;
+    OGRLayer *poLayer = poDS->GetLayerByName(layerName);
+    if (!poLayer) {
+        fprintf(stderr, "Error: Layer '%s' not found!\n", layerName);
         GDALClose(poDS);
         return features;
     }
 
+    if (filter)
+        poLayer->SetAttributeFilter(filter);
+
+    // Read Features and collect them
     poLayer->ResetReading();
     OGRFeature *poFeature;
     while ((poFeature = poLayer->GetNextFeature()) != nullptr)
         features.push_back(poFeature);
 
-    std::cout << "Total Florida TDA features: " << features.size() << std::endl;
+    printf("Total features read from %s: %zu\n", layerName, features.size());
 
     GDALClose(poDS);
     return features;
 }
 
-std::vector<OGRFeature*> ReadFloridaOSM()
-{
-    std::vector<OGRFeature*> features;
-
-    GDALDataset *poDS = (GDALDataset*) GDALOpenEx(
-        PATH_TO_FLORIDA_OSM, GDAL_OF_VECTOR, nullptr, nullptr, nullptr);
-    if (!poDS)
-    {
-        std::cerr << "Failed to open Florida OSM dataset." << std::endl;
-        return features;
-    }
-
-    OGRLayer *poLayer = poDS->GetLayerByName("lines");
-    if (!poLayer)
-    {
-        std::cerr << "Lines layer not found!" << std::endl;
-        GDALClose(poDS);
-        return features;
-    }
-
-    poLayer->SetAttributeFilter("highway IS NOT NULL");
-    poLayer->ResetReading();
-
-    OGRFeature *poFeature;
-    while ((poFeature = poLayer->GetNextFeature()) != nullptr)
-        features.push_back(poFeature);
-
-    std::cout << "Total Florida OSM roads: " << features.size() << std::endl;
-
-    GDALClose(poDS);
-    return features;
-}
-
-// --------------------- Greedy matching ---------------------
-
+// Finds the closest OSM feature for a limited number of TDA features.
 std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
-                               std::vector<OGRFeature*>& osmFeatures
-                               ,int limit)
+                               std::vector<OGRFeature*>& osmFeatures,
+                               int limit)
 {
     std::vector<Match> matches;
-    for (size_t i = 0; i < limit; ++i)
+
+    // Iterate through TDA features up to the limit
+    for (int i = 0; i < limit && i < tdaFeatures.size(); ++i)
     {
-        auto tdaFeature = tdaFeatures[i];
+        OGRFeature* current_tda_feature = tdaFeatures[i];
 
         double minHausdorff = std::numeric_limits<double>::max();
         OGRFeature* closestOSM = nullptr;
-        auto itClosest = osmFeatures.end();
 
+        // Iterator that points to the closest OSM feature found
+        auto it_closest_osm = osmFeatures.end();
+
+        // Inner loop: Iterate through all available OSM features
         for (auto it = osmFeatures.begin(); it != osmFeatures.end(); ++it)
         {
-            double dist = FeatureHausdorffDistance(tdaFeature, *it);
+            OGRFeature* current_osm_feature = *it;
+            double dist = FeatureHausdorffDistance(current_tda_feature, current_osm_feature);
+
             if (dist < minHausdorff)
             {
                 minHausdorff = dist;
-                closestOSM = *it;
-                itClosest = it;
+                closestOSM = current_osm_feature;
+                it_closest_osm = it;
             }
         }
 
+        // If a valid match was found
         if (closestOSM)
         {
-            matches.push_back(Match{ tdaFeature, closestOSM, minHausdorff });
-            osmFeatures.erase(itClosest); // ensure 1:1
+            matches.push_back(Match{ current_tda_feature, closestOSM, minHausdorff });
+
+            // Remove the matched OSM feature to ensure a 1:1 match.
+            // NOTE: This is O(N) and slow, but kept simple.
+            osmFeatures.erase(it_closest_osm);
         }
     }
 
     return matches;
 }
 
-// --------------------- Main ---------------------
-
 int main()
 {
     omp_set_num_threads(16);
     GDALAllRegister();
 
-    std::cout << "\nReading Florida TDA features:" << std::endl;
-    std::vector<OGRFeature*> floridaTDA = ReadFloridaTDA();
+    printf("\nReading TDA features (Speed Limits)...\n");
+    std::vector<OGRFeature*> floridaTDA = ReadFeatures(
+        PATH_TO_FLORIDA_MAX_SPEED_LIMIT, "Maximum_Speed_Limit_TDA");
 
-    std::cout << "\nFirst 10 Florida TDA features:" << std::endl;
-    for (int i = 0; i < 10 && i < floridaTDA.size(); ++i)
+    printf("\nReading OSM data (Roads, filtered)...\n");
+    std::vector<OGRFeature*> floridaOSM = ReadFeatures(
+        PATH_TO_FLORIDA_OSM, "lines", "highway IS NOT NULL");
+
+    printf("\nFirst 5 TDA features:\n");
+    for (int i = 0; i < 5 && i < floridaTDA.size(); ++i)
         PrintFeature(floridaTDA[i]);
 
-    std::cout << "\nReading Florida OSM data:" << std::endl;
-    std::vector<OGRFeature*> floridaOSM = ReadFloridaOSM();
-
-    std::cout << "\nFirst 10 Florida OSM roads:" << std::endl;
-    for (int i = 0; i < 10 && i < floridaOSM.size(); ++i)
+    printf("\nFirst 5 OSM features:\n");
+    for (int i = 0; i < 5 && i < floridaOSM.size(); ++i)
         PrintFeature(floridaOSM[i]);
 
+    int match_limit = 100;
+
     double startTime = omp_get_wtime();
-    std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, 1000);
+    std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, match_limit);
     double endTime = omp_get_wtime();
 
-    std::cout << "\nTotal matches: " << matches.size() << std::endl;
+    printf("\nMatching complete. Total successful matches: %zu\n", matches.size());
     PrintMatches(matches);
 
     printf("Matching took %f seconds\n", endTime - startTime);
 
-    // Cleanup
-    for (auto f : floridaTDA) OGRFeature::DestroyFeature(f);
-    for (auto f : floridaOSM) OGRFeature::DestroyFeature(f);
+    for (OGRFeature* f : floridaTDA)
+        OGRFeature::DestroyFeature(f);
+
+    for (OGRFeature* f : floridaOSM)
+        OGRFeature::DestroyFeature(f);
 
     return 0;
 }
