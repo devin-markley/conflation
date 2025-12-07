@@ -85,8 +85,8 @@ void PrintGeometry(OGRFeature* f)
     {
         char *wkt = nullptr;
         poGeom->exportToWkt(&wkt);
-        printf(" Geometry (WKT): %s", (wkt ? wkt : "(null)"));
-        CPLFree(wkt); // Mandatory manual cleanup
+        printf("%s", (wkt));
+        CPLFree(wkt);
     } else {
         printf(" Geometry: (null)");
     }
@@ -95,15 +95,13 @@ void PrintGeometry(OGRFeature* f)
 
 void PrintFeature(OGRFeature* f)
 {
-    printf("Fields: ");
-
     for (int i = 0; i < f->GetFieldCount(); ++i)
     {
         const char* field_value = f->IsFieldSetAndNotNull(i) ? f->GetFieldAsString(i) : "(null)";
         printf("%s,", field_value);
     }
 
-    PrintGeometry(f)
+    PrintGeometry(f);
 }
 
 void PrintMatches(const std::vector<Match>& matches)
@@ -114,7 +112,7 @@ void PrintMatches(const std::vector<Match>& matches)
 
         printf("  TDA: ");
         PrintGeometry(matches[i].tda_feature);
-
+        printf("\n");
         printf("  OSM: ");
         PrintGeometry(matches[i].tda_feature);
 
