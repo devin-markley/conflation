@@ -185,11 +185,10 @@ std::vector<OGRFeature*> ReadFloridaOSM()
 // --------------------- Greedy matching ---------------------
 
 std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
-                               std::vector<OGRFeature*>& osmFeatures)
+                               std::vector<OGRFeature*>& osmFeatures
+                               ,int limit)
 {
     std::vector<Match> matches;
-
-    size_t limit = std::min(tdaFeatures.size(), size_t(10)); // first 10 features
     for (size_t i = 0; i < limit; ++i)
     {
         auto tdaFeature = tdaFeatures[i];
@@ -241,7 +240,7 @@ int main()
         PrintFeature(floridaOSM[i]);
 
     double startTime = omp_get_wtime();
-    std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM);
+    std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, 100);
     double endTime = omp_get_wtime();
 
     std::cout << "\nTotal matches: " << matches.size() << std::endl;
