@@ -108,13 +108,39 @@ void PrintMatches(const std::vector<Match>& matches)
 {
     for (size_t i = 0; i < 6; ++i)
     {
+        OGRFeature* tda = matches[i].tda_feature;
+        OGRFeature* osm = matches[i].osm_feature;
+
+        // --- Use GetFieldIndex() to safely retrieve fields by name ---
+
+        // 1. Get the field index for TDA speed
+        int tda_speed_index = tda->GetFieldIndex("speed");
+
+        // 2. Get the field index for OSM speed
+        int osm_speed_index = osm->GetFieldIndex("max_speed");
+
+
+        // --- Retrieve Speed Limits ---
+
+        // Check if the field index is valid (not -1) AND the field is set
+        const char* tda_speed = (tda_speed_index != -1 && tda->IsFieldSetAndNotNull(tda_speed_index))
+                                ? tda->GetFieldAsString(tda_speed_index)
+                                : "(N/A)";
+
+        const char* osm_speed = (osm_speed_index != -1 && osm->IsFieldSetAndNotNull(osm_speed_index))
+                                ? osm->GetFieldAsString(osm_speed_index)
+                                : "(N/A)";
+
         printf("Distance: %.6f\n", i + 1, matches[i].distance);
 
-        printf("  TDA: ");
-        PrintGeometry(matches[i].tda_feature);
+        printf("  TDA Speed Limit: %s\n", tda_speed);
+        printf("  OSM Speed Limit: %s\n", osm_speed);
+
+        printf("TDA: ");
+        PrintGeometry(tda);
         printf("\n");
-        printf("  OSM: ");
-        PrintGeometry(matches[i].tda_feature);
+        printf("OSM: ");
+        PrintGeometry(osm);
 
         printf("----------------------------------\n");
     }
@@ -219,7 +245,7 @@ int main()
     for (int i = 0; i < 5 && i < floridaOSM.size(); ++i)
         PrintFeature(floridaOSM[i]);
 
-    int match_limit = 100;
+    int match_limit = 10;
 
     double startTime = omp_get_wtime();
     std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, match_limit);
