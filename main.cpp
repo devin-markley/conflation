@@ -68,28 +68,15 @@ std::vector<OGRPoint> GetPoints(OGRGeometry* geom)
     if (!geom) return points;
 
     OGRwkbGeometryType type = wkbFlatten(geom->getGeometryType());
-    if (type == wkbLineString)
+    OGRLineString* line = geom->toLineString();
+    for (int i = 0; i < line->getNumPoints(); ++i)
     {
-        OGRLineString* line = geom->toLineString();
-        for (int i = 0; i < line->getNumPoints(); ++i)
-        {
-            OGRPoint p;
-            line->getPoint(i, &p);
-            points.push_back(p);
-        }
+        OGRPoint p;
+        line->getPoint(i, &p);
+        points.push_back(p);
     }
-    else if (type == wkbPolygon)
-    {
-        OGRPolygon* poly = geom->toPolygon();
-        OGRLinearRing* ring = poly->getExteriorRing();
-        for (int i = 0; i < ring->getNumPoints(); ++i)
-        {
-            OGRPoint p;
-            ring->getPoint(i, &p);
-            points.push_back(p);
-        }
-    }
-    // Could add more types if needed
+
+
     return points;
 }
 
