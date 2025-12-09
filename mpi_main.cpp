@@ -15,7 +15,7 @@ struct MatchResult {
     double distance;
 };
 
-std::vector<MatchResult> ProcessLocalChunk(
+std::vector<MatchResult> GreedyMatchChunk(
     const std::vector<OGRFeature*>& allTdaFeatures,
     const std::vector<OGRFeature*>& allOsmFeatures,
     int limit,
@@ -24,29 +24,26 @@ std::vector<MatchResult> ProcessLocalChunk(
 {
     int n = std::min(limit, (int)allTdaFeatures.size());
 
-    // Calculate this rank's workload
-    int chunkSize = n / size;
+    // Simpler workload calculation
+    int baseChunk = n / size;
     int remainder = n % size;
-    int startIdx = rank * chunkSize + std::min(rank, remainder);
-    int endIdx = startIdx + chunkSize + (rank < remainder ? 1 : 0);
-    int localSize = endIdx - startIdx;
+    int startIdx = rank * baseChunk + std::min(rank, remainder);
+    int localSize = baseChunk + (rank < remainder ? 1 : 0);
+    int endIdx = startIdx + localSize;
 
     printf("Rank %d processing TDA features [%d, %d) = %d features\n",
            rank, startIdx, endIdx, localSize);
 
     std::vector<MatchResult> results(localSize);
 
-    // Process with OpenMP
     #pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < localSize; ++i)
     {
-        int globalIdx = startIdx + i;
-        OGRFeature* tda = allTdaFeatures[globalIdx];
+        OGRFeature* tda = allTdaFeatures[startIdx + i];
 
         double minDist = std::numeric_limits<double>::max();
         long bestOsmFID = -1;
 
-        // Search all OSM features
         for (size_t j = 0; j < allOsmFeatures.size(); ++j)
         {
             double dist = FeatureHausdorffDistance(tda, allOsmFeatures[j]);
@@ -57,16 +54,11 @@ std::vector<MatchResult> ProcessLocalChunk(
             }
         }
 
-        results[i] = MatchResult{
-            tda->GetFID(),
-            bestOsmFID,
-            minDist
-        };
+        results[i] = {tda->GetFID(), bestOsmFID, minDist};
     }
 
     return results;
 }
-
 // Gather results from all ranks to rank 0
 std::vector<MatchResult> GatherResults(
     const std::vector<MatchResult>& localResults,
@@ -74,45 +66,42 @@ std::vector<MatchResult> GatherResults(
     int size)
 {
     int localCount = localResults.size();
-    std::vector<int> recvCounts(size);
 
-    // Gather counts
-    MPI_Gather(&localCount, 1, MPI_INT,
-               recvCounts.data(), 1, MPI_INT,
-               0, MPI_COMM_WORLD);
+    // Gather counts from all ranks (all ranks need to know counts for displacements)
+    std::vector<int> allCounts(size);
+    MPI_Allgather(&localCount, 1, MPI_INT,
+                  allCounts.data(), 1, MPI_INT,
+                  MPI_COMM_WORLD);
 
-    std::vector<MatchResult> allResults;
-
-    if (rank == 0) {
-        // Calculate displacements
-        int totalCount = 0;
-        std::vector<int> displs(size);
-        displs[0] = 0;
-
-        for (int i = 0; i < size; ++i) {
-            totalCount += recvCounts[i];
-            if (i > 0) {
-                displs[i] = displs[i-1] + recvCounts[i-1];
-            }
-            // Convert to bytes
-            recvCounts[i] *= sizeof(MatchResult);
-            displs[i] *= sizeof(MatchResult);
-        }
-
-        allResults.resize(totalCount);
-
-        // Gather all results
-        int localBytes = localCount * sizeof(MatchResult);
-        MPI_Gatherv(localResults.data(), localBytes, MPI_BYTE,
-                    allResults.data(), recvCounts.data(), displs.data(), MPI_BYTE,
-                    0, MPI_COMM_WORLD);
-    } else {
-        // Non-root ranks just send
-        int localBytes = localCount * sizeof(MatchResult);
-        MPI_Gatherv(localResults.data(), localBytes, MPI_BYTE,
-                    nullptr, nullptr, nullptr, MPI_BYTE,
-                    0, MPI_COMM_WORLD);
+    // Calculate displacements and total count
+    std::vector<int> displacements(size);
+    int totalCount = 0;
+    for (int i = 0; i < size; ++i) {
+        displacements[i] = totalCount;
+        totalCount += allCounts[i];
     }
+
+    // Convert counts and displacements to bytes (since we're using MPI_BYTE)
+    std::vector<int> byteCounts(size);
+    std::vector<int> byteDisplacements(size);
+    for (int i = 0; i < size; ++i) {
+        byteCounts[i] = allCounts[i] * sizeof(MatchResult);
+        byteDisplacements[i] = displacements[i] * sizeof(MatchResult);
+    }
+
+    // Allocate receive buffer on rank 0
+    std::vector<MatchResult> allResults(rank == 0 ? totalCount : 0);
+
+    // Gather all results to rank 0
+    MPI_Gatherv(localResults.data(),
+                localCount * sizeof(MatchResult),
+                MPI_BYTE,
+                allResults.data(),
+                byteCounts.data(),
+                byteDisplacements.data(),
+                MPI_BYTE,
+                0,
+                MPI_COMM_WORLD);
 
     return allResults;
 }
@@ -181,14 +170,13 @@ int main(int argc, char** argv)
             PrintFeature(floridaOSM[i]);
     }
 
-    MPI_Barrier(MPI_COMM_WORLD);
     int match_limit = 100;
 
     MPI_Barrier(MPI_COMM_WORLD);
     double startTime = MPI_Wtime();
 
     // Each rank processes its chunk
-    std::vector<MatchResult> localResults = ProcessLocalChunk(
+    std::vector<MatchResult> localResults = GreedyMatchChunk(
         floridaTDA, floridaOSM, match_limit, rank, size);
 
     // Gather all results to rank 0
