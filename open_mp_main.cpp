@@ -155,41 +155,33 @@ std::vector<OGRFeature*> ReadFeatures(const char* path, const char* layerName, c
 
 // Finds the closest OSM feature for a limited number of TDA features.
 std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
-                               std::vector<OGRFeature*>& osmFeatures,
+                               const std::vector<OGRFeature*>& osmFeatures,
                                int limit)
 {
-    std::vector<Match> matches;
+    int n = std::min(limit, (int)tdaFeatures.size());
+    std::vector<Match> matches(n);
 
-    // Iterate through TDA features up to the limit
-    for (int i = 0; i < limit && i < tdaFeatures.size(); ++i)
+    #pragma omp parallel for schedule(dynamic, 1)
+    for (int i = 0; i < n; ++i)
     {
-        OGRFeature* current_tda_feature = tdaFeatures[i];
+        OGRFeature* tda = tdaFeatures[i];
 
         double minDist = std::numeric_limits<double>::max();
-        OGRFeature* closestOSM = nullptr;
+        OGRFeature* bestOSM = nullptr;
 
-        // Iterator that points to the closest OSM feature found
-        auto it_closest_osm = osmFeatures.end();
-
-        // Inner loop: Iterate through all available OSM features
-        for (auto it = osmFeatures.begin(); it != osmFeatures.end(); ++it)
+        // Inner loop — not erased anymore, so safe to read in parallel
+        for (int j = 0; j < osmFeatures.size(); ++j)
         {
-            OGRFeature* current_osm_feature = *it;
-            double dist = FeatureHausdorffDistance(current_tda_feature, current_osm_feature);
-
+            double dist = FeatureHausdorffDistance(tda, osmFeatures[j]);
             if (dist < minDist)
             {
                 minDist = dist;
-                closestOSM = current_osm_feature;
-                it_closest_osm = it;
+                bestOSM = osmFeatures[j];
             }
         }
 
-        // If a valid match was found
-        if (closestOSM)
-        {
-            matches.push_back(Match{ current_tda_feature, closestOSM, minDist});
-        }
+        // Store match result directly into its slot
+        matches[i] = Match{ tda, bestOSM, minDist };
     }
 
     return matches;
@@ -216,7 +208,7 @@ int main()
     for (int i = 0; i < 5 && i < floridaOSM.size(); ++i)
         PrintFeature(floridaOSM[i]);
 
-    int match_limit = 10;
+    int match_limit = 100;
 
     double startTime = omp_get_wtime();
     std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, match_limit);
