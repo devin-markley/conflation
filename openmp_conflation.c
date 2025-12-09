@@ -48,7 +48,7 @@ int main()
     std::vector<OGRFeature*> floridaTDA = ReadFeatures(PATH_TO_FLORIDA_MAX_SPEED_LIMIT, "Maximum_Speed_Limit_TDA");
 
     printf("\nReading OSM data (Roads, filtered)...\n");
-    std::vector<OGRFeature*> floridaOSM = ReadFeatures(PATH_TO_FLORIDA_OSM, "lines", "highway IS NOT NULL");
+    std::vector<OGRFeature*> floridaOSM = ReadFeatures(PATH_TO_FLORIDA_OSM, "florida_non_residential_roads");
 
     printf("\nFirst 5 TDA features:\n");
     for (int i = 0; i < 5 && i < floridaTDA.size(); ++i)

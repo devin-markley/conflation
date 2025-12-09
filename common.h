@@ -4,10 +4,8 @@
 #include <limits>
 #include <ogrsf_frmts.h>
 
-const char* PATH_TO_FLORIDA_MAX_SPEED_LIMIT =
-    "/Users/devinmarkley/CLionProjects/untitled3/MSL_Florida.geojson";
-const char* PATH_TO_FLORIDA_OSM =
-    "/Users/devinmarkley/CLionProjects/untitled3/florida.osm.pbf";
+const char* PATH_TO_FLORIDA_MAX_SPEED_LIMIT = "MSL_Florida.geojson";
+const char* PATH_TO_FLORIDA_OSM = "florida_non_residential_roads.geojson";
 
 struct Match
 {

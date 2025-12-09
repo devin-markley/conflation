@@ -158,7 +158,7 @@ int main(int argc, char** argv)
 
     if (rank == 0) printf("\nAll ranks reading OSM data (Roads, filtered)...\n");
     std::vector<OGRFeature*> floridaOSM = ReadFeatures(
-        PATH_TO_FLORIDA_OSM, "lines", "highway IS NOT NULL");
+        PATH_TO_FLORIDA_OSM, "florida_non_residential_roads");
 
     if (rank == 0) {
         printf("\nFirst 5 TDA features:\n");
