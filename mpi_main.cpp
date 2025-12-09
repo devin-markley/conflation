@@ -171,7 +171,6 @@ int main(int argc, char** argv)
     std::vector<OGRFeature*> floridaOSM = ReadFeatures(
         PATH_TO_FLORIDA_OSM, "lines", "highway IS NOT NULL");
 
-    // Only rank 0 prints sample data
     if (rank == 0) {
         printf("\nFirst 5 TDA features:\n");
         for (int i = 0; i < 5 && i < floridaTDA.size(); ++i)
@@ -198,14 +197,15 @@ int main(int argc, char** argv)
     MPI_Barrier(MPI_COMM_WORLD);
     double endTime = MPI_Wtime();
 
-    //  rank 0 reconstructs and prints
+    //  rank 0 reconstructs and prints matches
     if (rank == 0) {
         std::vector<Match> matches = ReconstructMatches(
             allResults, floridaTDA, floridaOSM);
+        printf("\nMatching complete. Total successful matches: %zu\n", matches.size());
         PrintMatches(matches);
+        printf("Matching took %f seconds\n", endTime - startTime);
     }
 
-    // Cleanup
     for (auto f : floridaTDA) OGRFeature::DestroyFeature(f);
     for (auto f : floridaOSM) OGRFeature::DestroyFeature(f);
 

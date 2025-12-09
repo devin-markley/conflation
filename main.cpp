@@ -7,7 +7,6 @@
 #include <omp.h>
 #include "common.h"
 
-// Sequential Greedy Match
 std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
                                const std::vector<OGRFeature*>& osmFeatures,
                                int limit)

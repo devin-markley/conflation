@@ -8,8 +8,6 @@
 #include <omp.h>
 #include "common.h"
 
-
-
 std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
                                const std::vector<OGRFeature*>& osmFeatures,
                                int limit)
