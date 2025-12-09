@@ -9,176 +9,169 @@
 #include <ogrsf_frmts.h>
 #include "common.h"
 
-// Serializable structure for MPI communication
-struct MatchData {
+struct MatchResult {
     long tdaFID;
     long osmFID;
     double distance;
 };
 
-std::vector<Match> HybridGreedyMatch(
-    const std::vector<OGRFeature*>& tdaFeatures,
-    const std::vector<OGRFeature*>& osmFeatures,
+std::vector<MatchResult> ProcessLocalChunk(
+    const std::vector<OGRFeature*>& allTdaFeatures,
+    const std::vector<OGRFeature*>& allOsmFeatures,
     int limit,
     int rank,
     int size)
 {
-    int n = std::min(limit, (int)tdaFeatures.size());
+    int n = std::min(limit, (int)allTdaFeatures.size());
 
-    // Calculate workload distribution for this MPI rank
+    // Calculate this rank's workload
     int chunkSize = n / size;
     int remainder = n % size;
     int startIdx = rank * chunkSize + std::min(rank, remainder);
     int endIdx = startIdx + chunkSize + (rank < remainder ? 1 : 0);
     int localSize = endIdx - startIdx;
 
-    std::vector<Match> localMatches(localSize);
-
-    if (rank == 0) {
-        printf("Distributing %d TDA features across %d MPI ranks\n", n, size);
-    }
-
-    printf("Rank %d processing indices [%d, %d) - %d features\n",
+    printf("Rank %d processing TDA features [%d, %d) = %d features\n",
            rank, startIdx, endIdx, localSize);
 
-    // Each MPI rank processes its chunk using OpenMP
+    std::vector<MatchResult> results(localSize);
+
+    // Process with OpenMP
     #pragma omp parallel for schedule(dynamic, 1)
-    for (int idx = 0; idx < localSize; ++idx)
+    for (int i = 0; i < localSize; ++i)
     {
-        int i = startIdx + idx;
-        OGRFeature* tda = tdaFeatures[i];
+        int globalIdx = startIdx + i;
+        OGRFeature* tda = allTdaFeatures[globalIdx];
 
         double minDist = std::numeric_limits<double>::max();
-        OGRFeature* bestOSM = nullptr;
+        long bestOsmFID = -1;
 
-        // Inner loop: search all OSM features (read-only, thread-safe)
-        for (size_t j = 0; j < osmFeatures.size(); ++j)
+        // Search all OSM features
+        for (size_t j = 0; j < allOsmFeatures.size(); ++j)
         {
-            double dist = FeatureHausdorffDistance(tda, osmFeatures[j]);
+            double dist = FeatureHausdorffDistance(tda, allOsmFeatures[j]);
             if (dist < minDist)
             {
                 minDist = dist;
-                bestOSM = osmFeatures[j];
+                bestOsmFID = allOsmFeatures[j]->GetFID();
             }
         }
 
-        localMatches[idx] = Match{ tda, bestOSM, minDist };
+        results[i] = MatchResult{
+            tda->GetFID(),
+            bestOsmFID,
+            minDist
+        };
     }
 
-    return localMatches;
+    return results;
 }
 
-std::vector<Match> GatherMatches(
-    const std::vector<Match>& localMatches,
-    const std::vector<OGRFeature*>& tdaFeatures,
-    const std::vector<OGRFeature*>& osmFeatures,
-    int limit,
+// Gather results from all ranks to rank 0
+std::vector<MatchResult> GatherResults(
+    const std::vector<MatchResult>& localResults,
     int rank,
     int size)
 {
-    // Convert matches to serializable format
-    std::vector<MatchData> localData(localMatches.size());
-    for (size_t i = 0; i < localMatches.size(); ++i) {
-        localData[i].tdaFID = localMatches[i].tda_feature->GetFID();
-        localData[i].osmFID = localMatches[i].osm_feature->GetFID();
-        localData[i].distance = localMatches[i].distance;
-    }
-
-    // Gather sizes from all ranks
-    int localCount = localData.size();
+    int localCount = localResults.size();
     std::vector<int> recvCounts(size);
-    MPI_Gather(&localCount, 1, MPI_INT, recvCounts.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    std::vector<Match> allMatches;
+    // Gather counts
+    MPI_Gather(&localCount, 1, MPI_INT,
+               recvCounts.data(), 1, MPI_INT,
+               0, MPI_COMM_WORLD);
+
+    std::vector<MatchResult> allResults;
 
     if (rank == 0) {
-        // Calculate displacements and adjust sizes for byte-based gather
+        // Calculate displacements
+        int totalCount = 0;
         std::vector<int> displs(size);
         displs[0] = 0;
+
         for (int i = 0; i < size; ++i) {
-            recvCounts[i] *= sizeof(MatchData);
+            totalCount += recvCounts[i];
             if (i > 0) {
                 displs[i] = displs[i-1] + recvCounts[i-1];
             }
+            // Convert to bytes
+            recvCounts[i] *= sizeof(MatchResult);
+            displs[i] *= sizeof(MatchResult);
         }
 
-        int totalBytes = displs[size-1] + recvCounts[size-1];
-        int totalCount = totalBytes / sizeof(MatchData);
-        std::vector<MatchData> allData(totalCount);
+        allResults.resize(totalCount);
 
-        // Gather all match data
-        int localBytes = localCount * sizeof(MatchData);
-        MPI_Gatherv(localData.data(), localBytes, MPI_BYTE,
-                    allData.data(), recvCounts.data(), displs.data(), MPI_BYTE,
+        // Gather all results
+        int localBytes = localCount * sizeof(MatchResult);
+        MPI_Gatherv(localResults.data(), localBytes, MPI_BYTE,
+                    allResults.data(), recvCounts.data(), displs.data(), MPI_BYTE,
                     0, MPI_COMM_WORLD);
-
-        // Reconstruct matches from serialized data
-        allMatches.resize(totalCount);
-        for (int i = 0; i < totalCount; ++i) {
-            // Find features by FID
-            OGRFeature* tda = nullptr;
-            for (auto f : tdaFeatures) {
-                if (f->GetFID() == allData[i].tdaFID) {
-                    tda = f;
-                    break;
-                }
-            }
-
-            OGRFeature* osm = nullptr;
-            if (allData[i].osmFID != -1) {
-                for (auto f : osmFeatures) {
-                    if (f->GetFID() == allData[i].osmFID) {
-                        osm = f;
-                        break;
-                    }
-                }
-            }
-
-            allMatches[i] = Match{ tda, osm, allData[i].distance };
-        }
     } else {
-        // Non-root ranks just send their data
-        int localBytes = localCount * sizeof(MatchData);
-        MPI_Gatherv(localData.data(), localBytes, MPI_BYTE,
+        // Non-root ranks just send
+        int localBytes = localCount * sizeof(MatchResult);
+        MPI_Gatherv(localResults.data(), localBytes, MPI_BYTE,
                     nullptr, nullptr, nullptr, MPI_BYTE,
                     0, MPI_COMM_WORLD);
     }
 
-    return allMatches;
+    return allResults;
+}
+
+// Reconstruct Match objects
+std::vector<Match> ReconstructMatches(
+    const std::vector<MatchResult>& results,
+    const std::vector<OGRFeature*>& tdaFeatures,
+    const std::vector<OGRFeature*>& osmFeatures)
+{
+    std::vector<Match> matches(results.size());
+
+    for (size_t i = 0; i < results.size(); ++i) {
+        OGRFeature* tda = nullptr;
+        for (auto f : tdaFeatures) {
+            if (f->GetFID() == results[i].tdaFID) {
+                tda = f;
+                break;
+            }
+        }
+
+        OGRFeature* osm = nullptr;
+        if (results[i].osmFID != -1) {
+            for (auto f : osmFeatures) {
+                if (f->GetFID() == results[i].osmFID) {
+                    osm = f;
+                    break;
+                }
+            }
+        }
+
+        matches[i] = Match{ tda, osm, results[i].distance };
+    }
+
+    return matches;
 }
 
 int main(int argc, char** argv)
 {
-    // Initialize MPI
     MPI_Init(&argc, &argv);
 
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    // Set OpenMP threads per MPI rank
-    int threadsPerRank = 8;
-    omp_set_num_threads(threadsPerRank);
-
-    if (rank == 0) {
-        printf("Total parallelism: %d threads\n", size * threadsPerRank);
-    }
+    omp_set_num_threads(8);
 
     GDALAllRegister();
 
-    // All ranks read the data (OSM is read-only for searches)
-    if (rank == 0) printf("\nReading TDA features (Speed Limits)...\n");
+    // All ranks read the data independently
+    if (rank == 0) printf("\nAll ranks reading TDA features (Speed Limits)...\n");
     std::vector<OGRFeature*> floridaTDA = ReadFeatures(
         PATH_TO_FLORIDA_MAX_SPEED_LIMIT, "Maximum_Speed_Limit_TDA");
 
-    if (rank == 0) printf("\nReading OSM data (Roads, filtered)...\n");
+    if (rank == 0) printf("\nAll ranks reading OSM data (Roads, filtered)...\n");
     std::vector<OGRFeature*> floridaOSM = ReadFeatures(
         PATH_TO_FLORIDA_OSM, "lines", "highway IS NOT NULL");
 
-    // Wait for all ranks to finish loading
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    // Only rank 0 prints sample features
+    // Only rank 0 prints sample data
     if (rank == 0) {
         printf("\nFirst 5 TDA features:\n");
         for (int i = 0; i < 5 && i < floridaTDA.size(); ++i)
@@ -189,30 +182,28 @@ int main(int argc, char** argv)
             PrintFeature(floridaOSM[i]);
     }
 
+    MPI_Barrier(MPI_COMM_WORLD);
     int match_limit = 100;
 
-    // Synchronize before timing
     MPI_Barrier(MPI_COMM_WORLD);
     double startTime = MPI_Wtime();
 
-    // Perform hybrid parallel matching
-    std::vector<Match> localMatches = HybridGreedyMatch(
+    // Each rank processes its chunk
+    std::vector<MatchResult> localResults = ProcessLocalChunk(
         floridaTDA, floridaOSM, match_limit, rank, size);
 
-    if (rank == 0) printf("\nGathering results from all ranks...\n");
-
-    // Gather results to rank 0
-    std::vector<Match> allMatches = GatherMatches(
-        localMatches, floridaTDA, floridaOSM, match_limit, rank, size);
+    // Gather all results to rank 0
+    std::vector<MatchResult> allResults = GatherResults(localResults, rank, size);
 
     MPI_Barrier(MPI_COMM_WORLD);
     double endTime = MPI_Wtime();
 
+    //  rank 0 reconstructs and prints
     if (rank == 0) {
-        PrintMatches(allMatches);
+        std::vector<Match> matches = ReconstructMatches(
+            allResults, floridaTDA, floridaOSM);
+        PrintMatches(matches);
     }
-
-    printf("Matching took %f seconds\n", endTime - startTime);
 
     // Cleanup
     for (auto f : floridaTDA) OGRFeature::DestroyFeature(f);
