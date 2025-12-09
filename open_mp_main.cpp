@@ -6,12 +6,9 @@
 #include <cstdio>
 #include <ogrsf_frmts.h>
 #include <omp.h>
-#include "geo_utils.h"
+#include "common.h"
 
-const char* PATH_TO_FLORIDA_MAX_SPEED_LIMIT =
-    "/Users/devinmarkley/CLionProjects/untitled3/MSL_Florida.geojson";
-const char* PATH_TO_FLORIDA_OSM =
-    "/Users/devinmarkley/CLionProjects/untitled3/florida.osm.pbf";
+
 
 std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
                                const std::vector<OGRFeature*>& osmFeatures,
