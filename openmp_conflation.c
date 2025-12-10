@@ -58,7 +58,7 @@ int main()
     for (int i = 0; i < 5 && i < floridaOSM.size(); ++i)
         PrintFeature(floridaOSM[i]);
 
-    int match_limit = 100;
+    int match_limit = 200;
 
     double startTime = omp_get_wtime();
     std::vector<Match> matches = GreedyMatch(floridaTDA, floridaOSM, match_limit);

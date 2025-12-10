@@ -39,7 +39,6 @@ std::vector<Match> GreedyMatch(const std::vector<OGRFeature*>& tdaFeatures,
 
 int main()
 {
-    omp_set_num_threads(16);
     GDALAllRegister();
 
     printf("\nReading TDA features (Speed Limits)...\n");

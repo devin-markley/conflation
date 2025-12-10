@@ -170,7 +170,7 @@ int main(int argc, char** argv)
             PrintFeature(floridaOSM[i]);
     }
 
-    int match_limit = 100;
+    int match_limit = 200;
 
     MPI_Barrier(MPI_COMM_WORLD);
     double startTime = MPI_Wtime();
